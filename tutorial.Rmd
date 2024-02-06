@@ -1,0 +1,477 @@
+---
+title: "Tutorial ANOVA de uma via para plano amostral AC1"
+author: "Iara Passos, Júlia Vargas, Luiza Dalmolin, Vitória Garcia"
+date: "2024-02-04"
+output:
+   prettydoc::html_pretty:
+     theme: lumen
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(survey)
+library(sampling)
+
+Crime_Data_from_2020_to_Present <- read_csv("Crime_Data_from_2020_to_Present.csv")
+```
+
+# Descrição do banco escolhido
+
+A base de dados escolhida contêm os crimes registrados na cidade de Los Angeles de janeiro de 2020 a dezembro de 2023. O banco original pode ser encontrado no seguinte link: https://www.kaggle.com/datasets/asaniczka/crimes-in-los-angeles-2020-2023/data
+
+As informações sobre cada crime registrado são:
+
+| Variável            | Descrição                                                        | Tipo       |
+|---------------------|------------------------------------------------------------------|------------|
+| division_number     | número da divisão da polícia que registrou o crime               | categórica |
+| date_reported       | data em que o crime foi reportado                                | data       |
+| date_occurred       | data em que o crime ocorreu                                      | data       |
+| area                | código área em que o crime ocorreu                               | categórica |
+| area_name           | área em que o crime ocorreu                                      | categórica |
+| reporting_district  | distrito em que o crime foi reportado                            | categórica |
+| part                | número da parte do crime                                         | categórica |
+| crime_code          | código do tipo de crime primário                                 | categórica |
+| crime_description   | descrição do crime primário                                      | categórica |
+| modus_operandi      | código modus operanti do crime                                   | categórica |
+| victim_age          | idade da vítima do crime                                         | numérica   |
+| victim_sex          | sexo da vítima do crime                                          | categórica |
+| victim_descent      | etnia da vítima                                                  | categórica |
+| premise_code        | código do tipo de local em que o crime ocorreu                   | categórica |
+| premise_description | descrição do tipo de local em que o crime ocorreu                | categórica |
+| weapon_code         | código do tipo de arma utilizada no crime                        | categórica |
+| weapon_description  | descrição do tipo de arma utilizada no crime                     | categórica |
+| status              | código do status do crime                                        | categórica |
+| status_description  | descrição do status do crime                                     | categórica |
+| crime_code_1        | código 1 adicional do crime, se aplicável                        | categórica |
+| crime_code_2        | código 2 adicional do crime, se aplicável                        | categórica |
+| crime_code_3        | código 3 adicional do crime, se aplicável                        | categórica |
+| crime_code_4        | código 4 adicional do crime, se aplicável                        | categórica |
+| location            | endereço em que o crime ocorreu                                  | texto      |
+| cross_street        | a rua que cruza o endereço em que o crime ocorreu (se aplicável) | texto      |
+| latitude            | latitude em que o crime ocorreu                                  | numérica   |
+| longitude           | longitude em que o crime ocorreu                                 | numérica   |
+
+Para esse tutorial, usaremos o bairro como conglomerados, o tipo de crime como variável categórica e a idade da vítima como variável numérica a ser analisada. No entanto, será necessário realizar alguns tratamentos na base antes de continuarmos. 
+
+# Tratamento do banco e definição do banco final
+
+```{r}
+Crime_Data_from_2020_to_Present %>% 
+  ggplot(aes(x = victim_age)) + geom_histogram()
+```
+```{r}
+range(Crime_Data_from_2020_to_Present$victim_age)
+```
+
+```{r}
+Crime_Data_from_2020_to_Present %>%  
+  filter(victim_age <= 0) %>% 
+  group_by(victim_age) %>% 
+  count()
+```
+
+```{r}
+Crime_Data_from_2020_to_Present %>%  
+  filter(victim_age == 0) %>% 
+  group_by(crime_description) %>% 
+  count()
+```
+```{r}
+Crime_Data_from_2020_to_Present %>%  
+  group_by(victim_sex) %>% 
+  count()
+```
+```{r}
+Crime_Data_from_2020_to_Present %>%  
+  group_by(victim_descent) %>% 
+  count() %>% 
+  arrange(n)
+```
+Com base nos dados do [censo da cidade de Los Angeles de 2020](https://data.census.gov/table/DECENNIALPL2020.P2?g=160XX00US0644000&y=2020&d=DEC+Redistricting+Data+(PL+94-171)) verificamos a seguinte distribuição étnica: 
+
+| Grupo étnico            | Proporção         |
+|---------------------|---------------------------------|
+|Hispanic/Latino | 46.9%|
+|White (alone, not Hispanic or Latino)| 28.9%|
+|Asian (alone)| 11.7%|
+|Black or African American | 8.3%|
+|Two or more races|3.3%|
+|Other (alone)|0.7%|
+|Native American (alone)|0.2%|
+|Native Hawaiian and Other Pacific Islander (alone)|0.1%|
+
+Considerando as categorias apresentadas no banco e a proporção populacional, supomos que:
+
+* H - Hispanic
+* W - White
+* A - Asian
+* B - Black
+* O - Other
+
+Analisando o gráfico e as tabelas, definimos:
+
+* retirar vítimas com idade menor do que 0 e 120 anos, pois possivelmente se trata de missing no banco;
+* retirar vítimas com idade 0, pois possivelmente se trata de missing no banco, dada a natureza dos crimes;
+* retirar vítimas com idade abaixo de 16 anos, por não haver confiança nos dados inseridos, analisando também a natureza dos crimes. 
+* retirar vítimas que não tem sexo F (female) ou M (male) 
+* retirar vítimas que não tem etnia das categorias H, W, A, B ou O
+
+```{r}
+amostra <- Crime_Data_from_2020_to_Present %>% 
+  select("date_reported", "date_occurred", "area", "area_name", "crime_code", 
+         "crime_description", "victim_age", "victim_sex", "victim_descent", "crime_code_1") %>% 
+  filter(victim_age >= 16) %>%
+  filter(victim_age != 120) %>% 
+  filter(victim_sex == "F" | victim_sex == "M") %>% 
+  filter(victim_descent == "H" | victim_descent == "W" | victim_descent == "A" | victim_descent == "B" | victim_descent == "O" )
+
+contagem <- amostra %>% 
+  group_by(crime_description) %>% 
+  count() 
+
+contagem %>% 
+  arrange(n)
+```
+ 
+
+```{r fig.height=15, fig.width=12}
+amostra %>% 
+  ggplot(aes(x = crime_description)) + geom_bar()
+```
+Por haver muitos crimes com pouca frequência, optamos por retirar aqueles com menos de 10000 casos. 
+
+```{r}
+
+tipos <- contagem %>% 
+  filter(n >= 10000) %>% 
+  select(crime_description)
+
+amostra_tipos <- amostra %>% 
+  filter(crime_description %in% tipos$crime_description)
+```
+
+Resultando na seguinte distribuição na idade das vítimas:
+
+```{r fig.height=15, fig.width=12}
+amostra_tipos %>% 
+  ggplot(aes(x = victim_age)) + geom_histogram()
+```
+
+Em uma distribuição por tipo de crime conforme a seguir:
+
+```{r}
+amostra_tipos %>% 
+  group_by(crime_description) %>% 
+  count()
+```
+
+```{r fig.height=15, fig.width=12}
+amostra_tipos %>% 
+  ggplot(aes(x = crime_description)) + geom_bar()
+```
+
+
+E em uma distribuição por bairros conforme a seguir:
+
+```{r}
+amostra_tipos %>% 
+  group_by(area_name) %>% 
+  count()
+```
+
+```{r fig.height=15, fig.width=12}
+amostra_tipos %>% 
+  ggplot(aes(x = area_name)) + geom_bar()
+```
+
+Realizado o tratamento necessário na base, podemos seguir com o nosso tutorial. 
+
+# Plano amostral AC1
+
+Um plano amostral por conglomerado de uma etapa envolve a seleção de conglomerados como unidades primárias de amostragem. Um conglomerado é um grupo de elementos ou unidades dentro da população. A amostragem por conglomerado é frequentemente usada quando a população é grande e dispersa, tornando a amostragem de cada elemento impraticável.
+
+No plano amostral por conglomerado de uma etapa:
+
+* A população é dividida em conglomerados.
+* Uma amostra de conglomerados é selecionada aleatoriamente.
+* Todos os elementos dentro dos conglomerados selecionados compõem a amostra.
+
+O objetivo é economizar custos e facilitar a coleta de dados, já que a amostragem é realizada em unidades de conglomerados em vez de indivíduos.
+
+No caso desse tutorial, os conglomerados serão os bairros dos crimes. 
+
+## Parâmetros 
+
+Na estatística, um parâmetro é uma medida numérica que descreve uma característica de uma população e são usados para resumir e descrever aspectos importantes de uma população ou de uma amostra. Na população, parâmetros são valores numéricos que descrevem características específicas da população. No caso do nosso exemplo são os parâmetros de todos os crimes ocorridos em Los Angeles entre 2020 e 2023. Já no caso da amostra, são valores numéricos que descrevem características específicas de uma amostra retirada da população e são usados para fazer inferências sobre os parâmetros populacionais. 
+
+Os parâmetros são cruciais na inferência estatística, que envolve fazer afirmações ou inferências sobre uma população com base em informações de uma amostra. Quando se realiza uma inferência estatística, os parâmetros populacionais são frequentemente desconhecidos e são estimados usando os parâmetros amostrais.
+
+Considerando a base tratada como nossa população, vamos realizar o cálculo dos parâmetros da população, para depois realizar o cálculo do tamanho da amostra. 
+
+```{r}
+base_final <- amostra_tipos %>% 
+  select(area, area_name, crime_code, crime_description, victim_age, victim_sex, victim_descent) %>% 
+  mutate(area_name = as.factor(area_name), 
+         crime_description = as.factor(crime_description), 
+         victim_sex = as.factor(victim_sex))
+
+congls <- base_final$area_name
+```
+
+```{r}
+Balfas <- table(congls)
+
+Bbarra <- mean(Balfas)
+
+A <- length(Balfas)
+
+N <- A*Bbarra
+```
+
+O total de observações na população:
+
+$N =$ `r N`
+
+O número de conglomerados na população é:
+
+$A =$ `r A`
+
+O tamanho de cada um dos conglomerados:
+
+`r Balfas`
+
+A média de observações por conglomerado:
+
+$\bar{B} =$ `r Bbarra`
+
+Considerando a varíavel idade da vítima (`victim_age`) que o que queremos estimar nesse tutorial. Temos os seguintes parâmetros na população:
+
+
+```{r}
+#### Informando variavel de analise
+variavel <- base_final$victim_age
+
+#### Parametros gerais
+# Media populacional
+mi <- mean(variavel)
+
+# Total populacional
+totalp <- sum(variavel)
+
+# Variancia populacional
+sigma2 <- ((N-1)/N)*var(variavel)
+
+```
+
+A média de idade na população é: `r mi`
+
+O total da idade (soma de todas as idades) na população é: `r totalp`
+
+E a variância populacional é: `r sigma2`
+
+Em relação aos conglomerados temos:
+
+```{r}
+
+#### Parametros por conglomerado 
+totais_congl <- tapply(variavel, congls, sum)
+medias_congl <- tapply(variavel, congls, mean)
+
+varpop <- function(x){
+  var(x)*(length(x)-1)/length(x)
+}
+
+vars_congl <- tapply(variavel, congls, varpop)
+
+# Media das medias
+mibarra <- mean(medias_congl)
+
+# Total medio
+taubarra <- mean(totais_congl)
+
+# Variancia dentro de conglomerados
+sigma2dc <- sum((Balfas/Bbarra)*vars_congl)/A
+
+# Variancia entre conglomerados
+sigma2ec <- sum((Balfas/Bbarra)*(medias_congl-mi)^2)/A
+
+sigmas <- sigma2dc + sigma2ec
+
+# Variancia entre totais
+var_totais <- varpop(totais_congl)
+
+```
+
+O total da idade por conglomerado:
+
+`r totais_congl`
+
+A média da idade por conglomerado:
+
+`r medias_congl`
+
+A variância da idade por conglomerado:
+
+`r vars_congl`
+
+A média das médias das idades dos conglomerados: `r mibarra`
+
+O total médio das idades dos conglomerados: `r taubarra`
+
+A variância dentro dos conglomerados: `r sigma2dc`
+
+A variância entre os conglomerados: `r sigma2ec`
+
+A soma da variância dentro dos conglomerados e da variância entre os conglomerados: `r sigmas`
+
+A variância entre os totais: `r var_totais`
+
+
+## Cálculo do tamanho da amostra
+
+Agora, realizaremos o cálculo do tamanho da amostra. 
+
+
+```{r}
+epi.cluster1size = function (n, mean, var, epsilon.r, method = "mean", conf.level = 0.95) 
+{
+  N. <- 1 - ((1 - conf.level)/2)
+  z <- qnorm(N., mean = 0, sd = 1)
+  if (method == "total") {
+    Vsq <- var/mean^2
+    numerator <- z^2 * n * Vsq
+    denominator <- z^2 * Vsq + (n - 1) * epsilon.r^2
+    rval <- round(numerator/denominator, digits = 0)
+  }
+  if (method == "mean") {
+    Vsq <- var/mean^2
+    numerator <- z^2 * n * Vsq
+    denominator <- z^2 * Vsq + (n - 1) * epsilon.r^2
+    rval <- round(numerator/denominator, digits = 0)
+  }
+  if (method == "mean.per.unit") {
+    Vsq <- var/mean^2
+    numerator <- z^2 * n * Vsq
+    denominator <- z^2 * Vsq + (n - 1) * epsilon.r^2
+    rval <- round(numerator/denominator, digits = 0)
+  }
+  if (method == "proportion") {
+    if (length(var) != 2) 
+      stop("Error: var must be of length 2")
+    if (length(mean) != 2) 
+      stop("Error: mean must be of length 2")
+    rval <- "Not implemented yet!"
+  }
+  return(rval)
+}
+
+```
+
+Utilizando os parâmetros calculados anteriormente: variância entre os totais, total médio das idades dos conglomerados, número de conglomerados na população. E esperando um erro não maior que 10% (erro relativo) e um intervalo de confiança de 99,73%, calculamos o número de conglomerados necessário. 
+
+```{r}
+# A = qnt de bairros
+
+A = 21
+s2.entre.totais = var_totais
+total.medio = taubarra
+#sqrt(s2.entre.totais)/total.medio  #CV
+conf = 0.9973
+erro.rel = 0.1
+
+tam_amostra <- epi.cluster1size(n = A, mean = total.medio, var = s2.entre.totais, epsilon = erro.rel, 
+                 method = "mean.per.unit", conf.level = conf)
+
+```
+
+Sendo assim, o número de conglomerados necessário para termos um erro relativo de 10% e um intervalo de confiança de 99,73% é de `r tam_amostra` (a). 
+
+Selecionando 12 bairros:
+
+```{r}
+a = 12
+set.seed(2024)
+
+
+am_cl = sampling::cluster(data = base_final, clustername = c("area_name"), a, method="srswor") # sem reposição
+dados = getdata(base_final, am_cl)
+n = dim(dados)[1]
+
+dados <- dados %>% 
+  mutate(area_name = factor(area_name)) 
+```
+
+Os bairros selecionados para a amostra foram:
+
+```{r}
+levels(dados$area_name)
+```
+
+A frequência de crimes nos bairros selecionados:
+
+```{r}
+dados %>% 
+  group_by(area_name) %>% 
+  count()
+```
+
+
+# ANOVA de uma via 
+
+A ANOVA (Análise de Variância) de uma via é uma técnica estatística utilizada para comparar as médias de três ou mais grupos independentes em apenas uma variável independente. No caso, vamos realizar dois testes: uma para a variável `crime_description` e outro para a `victim_descent`. 
+
+Como temos um desenho amostral complexo, iremos realizar a função svydesign para criar um objeto de desenho amostral considerando os conglomerados. 
+
+
+```{r}
+
+design <- svydesign(id=~area_name, data=dados, probs=~Prob, fpc=rep(A,n)) #probs = a/A pois selecao sem reposicao. #fpc necessario na sem reposicao.
+```
+
+Para calcular as médias da variável idade nos dados ponderados utilizamos a função `svymean`.
+
+```{r}
+svymean(~victim_age, design)
+```
+
+Para calcular os totais da variável idade nos dados ponderado utilizamos a função `svytotal`.
+
+```{r}
+svytotal(~victim_age, design)
+```
+
+Para calcular as médias e os totais da variável idade nos dados ponderados por conglomerado utilizamos a função `svyby`.
+
+```{r}
+svyby(~victim_age, ~area_name, design = design, FUN = svymean)
+```
+
+
+```{r}
+svyby(~victim_age, ~area_name, design = design, FUN = svytotal)
+```
+
+Utilizamos a função `svyglm` para ajustar um modelo de regressão linear generalizada (GLM) em dados ponderados por levantamento, no caso a amostra por conglomerado de uma etapa. Primeiro para a variável `crime_description` e depois para a variável `victim_descent`, conforme a seguir:
+
+```{r, warning=FALSE}
+m1 = svyglm(victim_age ~ crime_description, design = design)
+
+summary(m1,df=degf(design))
+```
+Nesse caso, verificamos que não há diferença da média da idade da vítima do tipo de crime BRANDISH WEAPON e BURGLARY FROM VEHICLE em relação a categoria de referência, ASSAULT WITH DEADLY WEAPON, AGGRAVATED ASSAULT.
+
+
+```{r }
+m2 = svyglm(victim_age ~ victim_descent, design = design)
+
+summary(m2)
+```
+
+No caso do teste para etnia da vítima, temos que não há diferença na idade das vítimas da etnia B (black) e O (other) em relação a etnia de referência, A (Asian). Sendo que há diferença para H (hispanic) e W (white), em relação a etnia A (Asian).
+
+```{r}
+regTermTest(m2,~victim_descent)
+```
+
+O teste de Wald fornece evidências de que a variável etnia (victim_descent) tem um efeito significativo na idade das vítimas (victim_age). O p-valor sugere que a hipótese nula de que não há efeito significativo pode ser rejeitada.
+
